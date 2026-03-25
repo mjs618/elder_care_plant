@@ -5,32 +5,69 @@ Provides reusable dependency functions for:
   - API Key authentication
   - Tenant-aware database sessions
   - Module permission gates (component licensing)
+  - Fine-grained permission checking
   - Rate limiting by tenant SLA tier
 """
 import uuid
 
-from fastapi import Depends, Header, HTTPException, Request, status
+from fastapi import Depends, Header, HTTPException, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from jose import JWTError
-from sqlalchemy import select
+from sqlalchemy import distinct, select
+from sqlalchemy.orm import selectinload
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.core.database import AsyncSessionLocal, get_db, _set_tenant_context
+from app.core.database import AsyncSessionLocal, get_db, _reset_tenant_context, _set_tenant_context
 from app.core.security import decode_token, verify_api_key
-from app.models.user import APIKey, User, UserScope
+from app.core.module_registry import CORE_MODULES, module_registry
+from app.models.user import APIKey, Permission, Role, RolePermission, User, UserRole, UserScope
 from app.models.tenant import Tenant, TenantModule, TenantStatus
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
 
-# ── Auth helpers ─────────────────────────────────────────────────────────────
-
 async def _get_user_by_id(db: AsyncSession, user_id: str) -> User:
-    result = await db.execute(select(User).where(User.id == uuid.UUID(user_id)))
+    result = await db.execute(
+        select(User)
+        .options(
+            selectinload(User.user_roles)
+            .selectinload(UserRole.role)
+            .selectinload(Role.role_permissions)
+            .selectinload(RolePermission.permission)
+        )
+        .where(User.id == uuid.UUID(user_id))
+    )
     user = result.scalar_one_or_none()
     if not user or not user.is_active or user.is_deleted:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="User not found or inactive")
     return user
+
+
+def _iter_module_definitions():
+    return module_registry.all() or CORE_MODULES
+
+
+def _get_module_definition_by_permission(permission_code: str):
+    for module_def in _iter_module_definitions():
+        if permission_code in module_def.permissions:
+            return module_def
+    return None
+
+
+async def get_user_permission_codes(db: AsyncSession, user: User) -> list[str]:
+    if user.scope == UserScope.PLATFORM:
+        return sorted({perm for module_def in _iter_module_definitions() for perm in module_def.permissions})
+
+    stmt = (
+        select(distinct(Permission.code))
+        .join(RolePermission, RolePermission.permission_id == Permission.id)
+        .join(Role, Role.id == RolePermission.role_id)
+        .join(UserRole, UserRole.role_id == Role.id)
+        .where(UserRole.user_id == user.id)
+        .where((Role.tenant_id == user.tenant_id) | (Role.tenant_id.is_(None)))
+    )
+    result = await db.execute(stmt)
+    return sorted(result.scalars().all())
 
 
 async def get_current_user(
@@ -43,7 +80,6 @@ async def get_current_user(
       1. Bearer JWT token
       2. X-API-Key header (for 3rd-party integrations)
     """
-    # ── API Key auth ──────────────────────────────────────────────────────────
     if x_api_key:
         prefix = x_api_key[:12]
         result = await db.execute(
@@ -54,7 +90,6 @@ async def get_current_user(
             raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
         return await _get_user_by_id(db, str(key_obj.user_id))
 
-    # ── Bearer JWT auth ───────────────────────────────────────────────────────
     if not credentials:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Not authenticated")
     try:
@@ -75,8 +110,6 @@ async def get_platform_admin(current_user: User = Depends(get_current_user)) -> 
     return current_user
 
 
-# ── Tenant-aware DB session ───────────────────────────────────────────────────
-
 async def get_tenant_db(
     current_user: User = Depends(get_current_user),
 ) -> AsyncSession:
@@ -87,12 +120,12 @@ async def get_tenant_db(
     if not current_user.tenant_id:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenant associated with user")
     async with AsyncSessionLocal() as session:
-        async with session.begin():
-            await _set_tenant_context(session, str(current_user.tenant_id))
+        await _set_tenant_context(session, str(current_user.tenant_id))
+        try:
             yield session
+        finally:
+            await _reset_tenant_context(session)
 
-
-# ── Module / License gate ─────────────────────────────────────────────────────
 
 def require_module(module_slug: str):
     """
@@ -105,7 +138,7 @@ def require_module(module_slug: str):
         db: AsyncSession = Depends(get_db),
     ) -> None:
         if current_user.scope == UserScope.PLATFORM:
-            return  # platform admins bypass module gates
+            return
 
         result = await db.execute(
             select(TenantModule).where(
@@ -118,6 +151,113 @@ def require_module(module_slug: str):
             raise HTTPException(
                 status_code=status.HTTP_402_PAYMENT_REQUIRED,
                 detail=f"Module '{module_slug}' is not activated for your subscription. Please upgrade your plan.",
+            )
+
+    return _check
+
+
+def require_permission(permission: str):
+    """
+    Dependency factory — gates an endpoint behind a specific permission check.
+    Usage:
+        @router.delete("/patients/{id}", dependencies=[Depends(require_permission("patient:delete"))])
+    """
+    async def _check(
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> User:
+        if current_user.scope == UserScope.PLATFORM:
+            return current_user
+
+        module_def = _get_module_definition_by_permission(permission)
+        if not module_def:
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Permission '{permission}' is not registered in any module"
+            )
+        current_user = await require_tenant_active(current_user=current_user, db=db)
+
+        result = await db.execute(
+            select(TenantModule).where(
+                TenantModule.tenant_id == current_user.tenant_id,
+                TenantModule.module_slug == module_def.slug,
+                TenantModule.is_active == True,  # noqa: E712
+            )
+        )
+        if not result.scalar_one_or_none():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You do not have permission '{permission}'. Module '{module_def.slug}' is not activated.",
+            )
+
+        permission_codes = await get_user_permission_codes(db, current_user)
+        if permission not in permission_codes:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"You do not have permission '{permission}'.",
+            )
+
+        return current_user
+
+    return _check
+
+
+async def require_tenant_active(
+    current_user: User = Depends(get_current_user),
+    db: AsyncSession = Depends(get_db),
+) -> User:
+    """
+    Dependency — ensures the user's tenant is active.
+    """
+    if current_user.scope == UserScope.PLATFORM:
+        return current_user
+    
+    if not current_user.tenant_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="No tenant associated with user"
+        )
+    
+    result = await db.execute(
+        select(Tenant.status).where(Tenant.id == current_user.tenant_id)
+    )
+    tenant_status = result.scalar_one_or_none()
+    
+    if tenant_status != TenantStatus.ACTIVE:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Tenant account is not active"
+        )
+    
+    return current_user
+
+
+def require_any_module(*module_slugs: str):
+    """
+    Dependency factory — gates an endpoint if user has ANY of the specified modules.
+    Usage:
+        @router.get("/dashboard", dependencies=[Depends(require_any_module("assessment", "health_monitoring"))])
+    """
+    async def _check(
+        current_user: User = Depends(get_current_user),
+        db: AsyncSession = Depends(get_db),
+    ) -> None:
+        if current_user.scope == UserScope.PLATFORM:
+            return
+
+        result = await db.execute(
+            select(TenantModule.module_slug).where(
+                TenantModule.tenant_id == current_user.tenant_id,
+                TenantModule.module_slug.in_(module_slugs),
+                TenantModule.is_active == True,  # noqa: E712
+            )
+        )
+        active_modules = [row[0] for row in result.all()]
+        
+        if not active_modules:
+            raise HTTPException(
+                status_code=status.HTTP_402_PAYMENT_REQUIRED,
+                detail=f"None of the required modules {module_slugs} are activated for your subscription.",
             )
 
     return _check

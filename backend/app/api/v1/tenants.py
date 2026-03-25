@@ -37,6 +37,11 @@ async def list_tenants(
     db: AsyncSession = Depends(get_db),
     _admin=Depends(get_platform_admin),
 ):
+    from sqlalchemy import func
+    
+    count_query = select(func.count()).select_from(Tenant).where(Tenant.is_deleted == False)  # noqa: E712
+    total = await db.scalar(count_query) or 0
+    
     result = await db.execute(
         select(Tenant)
         .where(Tenant.is_deleted == False)  # noqa: E712
@@ -44,8 +49,7 @@ async def list_tenants(
         .limit(page_size)
     )
     tenants = result.scalars().all()
-    count_result = await db.execute(select(Tenant).where(Tenant.is_deleted == False))  # noqa: E712
-    total = len(count_result.scalars().all())
+    
     return paginated(
         items=[{
             "id": str(t.id), "name": t.name, "slug": t.slug,

@@ -14,15 +14,29 @@ from fastapi import APIRouter
 
 
 @dataclass
+class NavChild:
+    title: str
+    path: str
+
+
+@dataclass
+class UIMeta:
+    icon: str
+    path: str
+    children: list[NavChild] = field(default_factory=list)
+
+
+@dataclass
 class ModuleDefinition:
-    slug: str                      # e.g. "assessment"
-    display_name: str              # e.g. "认知评估模块"
+    slug: str
+    display_name: str
     description: str = ""
     version: str = "1.0.0"
-    permissions: list[str] = field(default_factory=list)  # e.g. ["assessment:read", "assessment:write"]
+    permissions: list[str] = field(default_factory=list)
     router: APIRouter | None = None
     router_prefix: str = ""
     router_tags: list[str] = field(default_factory=list)
+    ui_meta: UIMeta | None = None
 
 
 class ModuleRegistry:
@@ -66,6 +80,14 @@ CORE_MODULES: list[ModuleDefinition] = [
         permissions=["patient:read", "patient:write", "patient:delete"],
         router_prefix="/api/v1/patients",
         router_tags=["患者管理"],
+        ui_meta=UIMeta(
+            icon="User",
+            path="/patients",
+            children=[
+                NavChild(title="患者列表", path="/patients/list"),
+                NavChild(title="健康档案", path="/patients/health-records"),
+            ],
+        ),
     ),
     ModuleDefinition(
         slug="assessment",
@@ -74,6 +96,14 @@ CORE_MODULES: list[ModuleDefinition] = [
         permissions=["assessment:read", "assessment:write", "assessment:delete"],
         router_prefix="/api/v1/assessments",
         router_tags=["认知评估"],
+        ui_meta=UIMeta(
+            icon="EditPen",
+            path="/assessments",
+            children=[
+                NavChild(title="评估列表", path="/assessments/list"),
+                NavChild(title="新增评估", path="/assessments/new"),
+            ],
+        ),
     ),
     ModuleDefinition(
         slug="health_monitoring",
@@ -82,6 +112,14 @@ CORE_MODULES: list[ModuleDefinition] = [
         permissions=["health:read", "health:write"],
         router_prefix="/api/v1/health",
         router_tags=["健康监测"],
+        ui_meta=UIMeta(
+            icon="Monitor",
+            path="/health",
+            children=[
+                NavChild(title="生命体征", path="/health/vitals"),
+                NavChild(title="用药管理", path="/health/medications"),
+            ],
+        ),
     ),
     ModuleDefinition(
         slug="ai_chat",
@@ -90,6 +128,13 @@ CORE_MODULES: list[ModuleDefinition] = [
         permissions=["ai_chat:use"],
         router_prefix="/api/v1/ai",
         router_tags=["AI智能"],
+        ui_meta=UIMeta(
+            icon="ChatLineRound",
+            path="/ai",
+            children=[
+                NavChild(title="AI健康问答", path="/ai/chat"),
+            ],
+        ),
     ),
     ModuleDefinition(
         slug="knowledge_base",
@@ -98,6 +143,14 @@ CORE_MODULES: list[ModuleDefinition] = [
         permissions=["knowledge:read", "knowledge:write", "knowledge:review"],
         router_prefix="/api/v1/knowledge",
         router_tags=["知识库"],
+        ui_meta=UIMeta(
+            icon="Reading",
+            path="/knowledge",
+            children=[
+                NavChild(title="知识文档", path="/knowledge/docs"),
+                NavChild(title="知识审核", path="/knowledge/review"),
+            ],
+        ),
     ),
     ModuleDefinition(
         slug="learning_center",
@@ -106,6 +159,14 @@ CORE_MODULES: list[ModuleDefinition] = [
         permissions=["learning:read", "learning:write", "learning:manage"],
         router_prefix="/api/v1/learning",
         router_tags=["学习中心"],
+        ui_meta=UIMeta(
+            icon="Memo",
+            path="/learning",
+            children=[
+                NavChild(title="课程中心", path="/learning/courses"),
+                NavChild(title="考试中心", path="/learning/exams"),
+            ],
+        ),
     ),
     ModuleDefinition(
         slug="reservation",
@@ -114,6 +175,10 @@ CORE_MODULES: list[ModuleDefinition] = [
         permissions=["reservation:read", "reservation:write"],
         router_prefix="/api/v1/reservations",
         router_tags=["预约服务"],
+        ui_meta=UIMeta(
+            icon="Calendar",
+            path="/reservations",
+        ),
     ),
     ModuleDefinition(
         slug="care_facility",
@@ -122,5 +187,9 @@ CORE_MODULES: list[ModuleDefinition] = [
         permissions=["facility:read", "facility:write"],
         router_prefix="/api/v1/facilities",
         router_tags=["养老机构"],
+        ui_meta=UIMeta(
+            icon="OfficeBuilding",
+            path="/facilities",
+        ),
     ),
 ]

@@ -12,26 +12,23 @@ import uuid
 import structlog
 from fastapi import FastAPI, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
 from slowapi import Limiter
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from jose import JWTError
 from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.core.config import get_settings
+from app.core.security import decode_token
 
 settings = get_settings()
 log = structlog.get_logger()
 
 
-# ── Rate Limiter ─────────────────────────────────────────────────────────────
-
 def _get_rate_limit_key(request: Request) -> str:
     """Use tenant_id from JWT payload if available, else fallback to IP."""
-    # The tenant ID is stored in request.state by the RequestContextMiddleware
     tenant_id = getattr(request.state, "tenant_id", None)
     return f"tenant:{tenant_id}" if tenant_id else get_remote_address(request)
-
 
 limiter = Limiter(key_func=_get_rate_limit_key)
 
@@ -48,6 +45,19 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         request_id = str(uuid.uuid4())
         request.state.request_id = request_id
         request.state.start_time = time.perf_counter()
+        request.state.tenant_id = None
+        request.state.user_id = None
+
+        auth_header = request.headers.get("Authorization")
+        if auth_header and auth_header.lower().startswith("bearer "):
+            token = auth_header.split(" ", 1)[1]
+            try:
+                payload = decode_token(token)
+                request.state.user_id = payload.get("sub")
+                request.state.tenant_id = payload.get("tid")
+            except JWTError:
+                # Auth failures are handled later by the auth dependencies.
+                pass
 
         with structlog.contextvars.bound_contextvars(
             request_id=request_id,

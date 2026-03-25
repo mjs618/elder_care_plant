@@ -34,7 +34,9 @@ export const useUserStore = defineStore('user', () => {
 
     async function fetchProfile() {
         const res = await authApi.me()
-        profile.value = (res as any).data ?? res
+        const userProfile = (res as any).data ?? res
+        profile.value = userProfile
+        permissions.value = userProfile.permissions ?? []
     }
 
     async function refreshAccessToken() {

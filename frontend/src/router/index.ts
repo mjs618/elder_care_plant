@@ -38,7 +38,6 @@ const staticRoutes: RouteRecordRaw[] = [
     // Platform Super Admin Console
     {
         path: '/admin',
-        name: 'AdminConsole',
         component: () => import('@/layouts/AdminLayout.vue'),
         meta: { requiresAuth: true, requiresPlatformAdmin: true },
         children: [
@@ -75,7 +74,6 @@ const staticRoutes: RouteRecordRaw[] = [
     // Tenant Console (main app shell — dynamic children added after login)
     {
         path: '/',
-        name: 'TenantConsole',
         component: () => import('@/layouts/MainLayout.vue'),
         meta: { requiresAuth: true },
         children: [
@@ -182,10 +180,7 @@ router.beforeEach(async (to, _from, next) => {
 
     // Load module registry once
     if (!moduleStore.isLoaded) {
-        await moduleStore.loadModules(
-            userStore.isPlatformAdmin ? undefined : undefined,
-            // TODO: Pass tenant's active module slugs from profile/tenant API
-        )
+        await moduleStore.loadModules()
     }
 
     // Platform admin only routes

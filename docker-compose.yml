@@ -36,6 +36,25 @@ services:
       timeout: 5s
       retries: 5
 
+  # ── RabbitMQ (Event Bus) ─────────────────────────────────────────────────
+  rabbitmq:
+    image: rabbitmq:3-management-alpine
+    container_name: eldercare_rabbitmq
+    restart: unless-stopped
+    ports:
+      - "5672:5672"    # AMQP 端口
+      - "15672:15672"  # 管理界面端口
+    environment:
+      RABBITMQ_DEFAULT_USER: eldercare
+      RABBITMQ_DEFAULT_PASS: eldercare123
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # ── Backend API ─────────────────────────────────────────────────────────
   backend:
     build:
@@ -48,9 +67,12 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
+      rabbitmq:
+        condition: service_healthy
     environment:
       DATABASE_URL: postgresql+asyncpg://postgres:password@postgres:5432/elder_care
       REDIS_URL: redis://redis:6379/0
+      RABBITMQ_URL: amqp://eldercare:eldercare123@rabbitmq:5672/
       APP_ENV: development
       SECRET_KEY: dev-secret-key-CHANGE-IN-PRODUCTION
       JWT_SECRET_KEY: dev-jwt-key-CHANGE-IN-PRODUCTION
@@ -79,3 +101,4 @@ services:
 volumes:
   postgres_data:
   redis_data:
+  rabbitmq_data:

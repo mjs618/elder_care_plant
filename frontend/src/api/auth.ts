@@ -21,6 +21,7 @@ export interface UserProfile {
     full_name: string | null
     scope: 'platform' | 'tenant'
     tenant_id: string | null
+    permissions: string[]
 }
 
 export const authApi = {
@@ -38,12 +39,19 @@ export const authApi = {
  * Modules API — fetches the list of registered modules
  * (used to build navigation and check tenant license)
  */
+export interface UIMeta {
+    icon: string
+    path: string
+    children?: { title: string; path: string }[]
+}
+
 export interface ModuleInfo {
     slug: string
     display_name: string
     description: string
     version: string
     permissions: string[]
+    ui_meta?: UIMeta
 }
 
 export const modulesApi = {

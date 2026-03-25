@@ -131,7 +131,7 @@ import { useModuleStore } from '@/stores/modules'
 import { useThemeStore } from '@/stores/theme'
 import {
   HomeFilled, Setting, ArrowDown, Expand, Fold,
-  Heart, SwitchButton,
+  MagicStick, SwitchButton,
 } from '@element-plus/icons-vue'
 import { ElMessageBox } from 'element-plus'
 

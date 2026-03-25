@@ -6,7 +6,7 @@ including `tenant_id` on every business table, combined with
 PostgreSQL Row-Level Security (RLS) policies.
 """
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 
 from sqlalchemy import Boolean, DateTime, String, func
 from sqlalchemy.dialects.postgresql import UUID
@@ -40,7 +40,7 @@ class SoftDeleteMixin:
 
     def soft_delete(self) -> None:
         self.is_deleted = True
-        self.deleted_at = datetime.utcnow()
+        self.deleted_at = datetime.now(timezone.utc)
 
 
 class BaseModel(TimestampMixin, SoftDeleteMixin, Base):

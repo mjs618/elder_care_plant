@@ -11,6 +11,9 @@ from alembic import context
 from app.models.base import Base
 from app.models.tenant import SubscriptionPlan, Tenant, TenantModule
 from app.models.user import User, Role, Permission, UserRole, RolePermission, APIKey
+from app.models.patient import Patient
+from app.models.assessment import Assessment
+from app.models.outbox import EventOutbox, ProcessedEvent
 from app.core.config import get_settings
 
 settings = get_settings()

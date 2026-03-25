@@ -32,6 +32,9 @@ class Settings(BaseSettings):
 
     # ── Redis ────────────────────────────────────────────────────────────────
     REDIS_URL: str = "redis://localhost:6379/0"
+    
+    # ── RabbitMQ (Event Bus) ─────────────────────────────────────────────────
+    RABBITMQ_URL: str | None = None  # e.g. "amqp://guest:guest@localhost:5672/"
 
     # ── JWT ──────────────────────────────────────────────────────────────────
     JWT_SECRET_KEY: str

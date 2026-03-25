@@ -8,7 +8,7 @@
       <!-- Brand -->
       <div class="login-brand">
         <div class="brand-circle">
-          <el-icon size="36" color="white"><Heart /></el-icon>
+          <el-icon size="36" color="white"><MagicStick /></el-icon>
         </div>
         <h1 class="login-title gradient-text">老年照顾平台</h1>
         <p class="login-sub">专业的老年护理综合管理系统</p>
@@ -67,7 +67,7 @@
 import { ref, reactive } from 'vue'
 import { useRouter } from 'vue-router'
 import { type FormInstance } from 'element-plus'
-import { Heart, Message, Lock, InfoFilled } from '@element-plus/icons-vue'
+import { MagicStick, Message, Lock, InfoFilled } from '@element-plus/icons-vue'
 import { useUserStore } from '@/stores/user'
 import { useModuleStore } from '@/stores/modules'
 
@@ -77,7 +77,10 @@ const moduleStore = useModuleStore()
 
 const formRef = ref<FormInstance>()
 const loading = ref(false)
-const form = reactive({ email: '', password: '' })
+const form = reactive({ 
+  email: 'tenant@eldercare.com', 
+  password: 'Tenant123!' 
+})
 
 const rules = {
   email: [{ required: true, message: '请输入邮箱', trigger: 'blur' }],
@@ -94,6 +97,8 @@ async function handleLogin() {
       // Platform admins go to the admin console
       if (userStore.isPlatformAdmin) router.push('/admin/dashboard')
       else router.push('/dashboard')
+    } catch (e) {
+      // Axios error interceptor already shows the UI error message
     } finally {
       loading.value = false
     }
