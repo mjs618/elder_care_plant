@@ -1,215 +1,198 @@
 """
 评估管理模块 - API路由
+统一入口，可独立运行也可被主应用挂载
 """
 from fastapi import APIRouter, Depends, HTTPException, Query
 from sqlalchemy import select, or_, desc, func
 from sqlalchemy.ext.asyncio import AsyncSession
 import uuid
-
-from app.core.database import get_db
-from app.core.dependencies import get_current_user, require_module
-from contracts.assessment_contract import AssessmentContract, AssessmentListContract
-from contracts.patient_contract import PatientClient
-from app.models.patient import Patient
-from app.models.assessment import Assessment
-from app.schemas.assessment import AssessmentCreate, AssessmentUpdate
-from shared.event_bus import Event, get_event_bus, EventType
 import structlog
+
+from app.core.dependencies import get_tenant_db, require_permission
+from app.models.user import User
+from app.models.assessment import Assessment
+from app.models.patient import Patient
+from app.schemas.assessment import AssessmentResponse, AssessmentCreate, AssessmentUpdate
+from app.schemas.response import ok, created, deleted
+from app.services.patient_service import PatientService
+from shared.event_bus import EventType, publish_event
 
 logger = structlog.get_logger()
 
 router = APIRouter()
-depends_module = Depends(require_module("assessment"))
 
 
-@router.get("", response_model=dict, dependencies=[depends_module])
+@router.get("", response_model=dict)
 async def list_assessments(
-    patient_id: uuid.UUID | None = None,
     search: str | None = None,
+    patient_id: uuid.UUID | None = None,
     page: int = Query(1, ge=1),
     size: int = Query(20, ge=1, le=100),
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user: User = Depends(require_permission("assessment:read")),
 ):
-    """获取评估列表"""
-    query = select(Assessment, Patient.full_name.label("patient_name")).join(
-        Patient, Assessment.patient_id == Patient.id
-    ).where(Assessment.is_deleted == False)
+    query = select(Assessment).where(Assessment.is_deleted == False)
 
+    
     if patient_id:
         query = query.where(Assessment.patient_id == patient_id)
         
     if search:
         query = query.where(
             or_(
-                Patient.full_name.ilike(f"%{search}%"),
                 Assessment.evaluator_name.ilike(f"%{search}%"),
                 Assessment.remarks.ilike(f"%{search}%"),
             )
         )
-
+    
     query = query.order_by(desc(Assessment.evaluation_date), desc(Assessment.created_at))
     offset = (page - 1) * size
     paginated_query = query.offset(offset).limit(size)
     
     result = await db.execute(paginated_query)
-    rows = result.all()
+    assessments = result.scalars().all()
     
-    items = []
-    for ass_obj, p_name in rows:
-        dump = AssessmentContract.model_validate(ass_obj).model_dump()
-        dump["patient_name"] = p_name
-        items.append(dump)
-
     count_query = select(func.count()).select_from(query.subquery())
     total = await db.scalar(count_query) or 0
     
-    return {
-        "code": 200,
-        "message": "success",
-        "data": {
-            "items": items,
-            "total": total,
-            "page": page,
-            "size": size,
-        }
-    }
+    patient_ids = [a.patient_id for a in assessments if a.patient_id]
+    patient_service = PatientService(db)
+    patient_names = await patient_service.get_patient_names_batch(patient_ids, current_user.tenant_id)
+    
+    items = []
+    for ass_obj in assessments:
+        dump = AssessmentResponse.model_validate(ass_obj).model_dump()
+        dump["patient_name"] = patient_names.get(ass_obj.patient_id)
+        items.append(dump)
+    
+    return ok({
+        "items": items,
+        "total": total,
+        "page": page,
+        "size": size,
+    })
 
 
-@router.get("/{assessment_id}", response_model=dict, dependencies=[depends_module])
+@router.get("/{assessment_id}", response_model=dict)
 async def get_assessment(
     assessment_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user: User = Depends(require_permission("assessment:read")),
 ):
-    """获取单个评估"""
-    query = select(Assessment, Patient.full_name).join(
-        Patient, Assessment.patient_id == Patient.id
-    ).where(Assessment.id == assessment_id, Assessment.is_deleted == False)
-    
-    result = await db.execute(query)
-    row = result.first()
-    if not row:
+    assessment = await db.scalar(
+        select(Assessment).where(Assessment.id == assessment_id, Assessment.is_deleted == False)
+    )
+    if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
-        
-    ass_obj, p_name = row
-    dump = AssessmentContract.model_validate(ass_obj).model_dump()
-    dump["patient_name"] = p_name
     
-    return {
-        "code": 200,
-        "message": "success",
-        "data": dump
-    }
+    patient_service = PatientService(db)
+    patient_name = await patient_service.get_patient_name(assessment.patient_id, current_user.tenant_id)
+    
+    dump = AssessmentResponse.model_validate(assessment).model_dump()
+    dump["patient_name"] = patient_name
+    
+    return ok(dump)
 
 
-@router.post("", response_model=dict, dependencies=[depends_module])
+@router.post("", response_model=dict)
 async def create_assessment(
     body: AssessmentCreate,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user: User = Depends(require_permission("assessment:write")),
 ):
-    """创建评估"""
-    if not current_user.tenant_id:
-        raise HTTPException(status_code=400, detail="No tenant context")
+    patient_service = PatientService(db)
+    patient_info = await patient_service.get_patient_info(body.patient_id, current_user.tenant_id)
+    if not patient_info:
+        raise HTTPException(status_code=404, detail="Patient not found in your organization")
     
-    patient = await db.scalar(
-        select(Patient).where(Patient.id == body.patient_id, Patient.is_deleted == False)
-    )
-    if not patient:
-        raise HTTPException(status_code=404, detail="Patient not found")
-
     assessment = Assessment(
         tenant_id=current_user.tenant_id,
         **body.model_dump()
     )
     db.add(assessment)
+    await db.flush()
+    
+    await publish_event(
+        db=db,
+        event_type=EventType.ASSESSMENT_CREATED,
+        source_module="assessment",
+        payload={
+            "assessment_id": str(assessment.id),
+            "patient_id": str(assessment.patient_id),
+            "tenant_id": str(assessment.tenant_id),
+            "assessment_type": assessment.assessment_type.value,
+        },
+        idempotency_key=f"assessment_created_{assessment.id}",
+    )
+    
     await db.commit()
     await db.refresh(assessment)
     
-    try:
-        event_bus = get_event_bus()
-        await event_bus.publish(Event(
-            event_type=EventType.ASSESSMENT_CREATED,
-            source_module="assessment",
-            payload={
-                "assessment_id": str(assessment.id),
-                "patient_id": str(assessment.patient_id),
-                "tenant_id": str(assessment.tenant_id),
-                "assessment_type": assessment.assessment_type,
-            }
-        ))
-    except Exception as e:
-        logger.error("event_publish_failed", error=str(e))
-    
-    dump = AssessmentContract.model_validate(assessment).model_dump()
-    dump["patient_name"] = patient.full_name
-    
-    return {
-        "code": 201,
-        "message": "success",
-        "data": dump
-    }
+    dump = AssessmentResponse.model_validate(assessment).model_dump()
+    dump["patient_name"] = patient_info.full_name
+    return created(dump)
 
 
-@router.put("/{assessment_id}", response_model=dict, dependencies=[depends_module])
+@router.put("/{assessment_id}", response_model=dict)
 async def update_assessment(
     assessment_id: uuid.UUID,
     body: AssessmentUpdate,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user: User = Depends(require_permission("assessment:write")),
 ):
-    """更新评估"""
-    assessment = await db.scalar(
-        select(Assessment).where(Assessment.id == assessment_id, Assessment.is_deleted == False)
-    )
+    assessment = await db.scalar(select(Assessment).where(Assessment.id == assessment_id, Assessment.is_deleted == False))
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
         
     for k, v in body.model_dump(exclude_unset=True).items():
         setattr(assessment, k, v)
+    
+    await db.flush()
+    
+    await publish_event(
+        db=db,
+        event_type=EventType.ASSESSMENT_UPDATED,
+        source_module="assessment",
+        payload={
+            "assessment_id": str(assessment.id),
+            "patient_id": str(assessment.patient_id),
+            "tenant_id": str(assessment.tenant_id),
+        },
+        idempotency_key=f"assessment_updated_{assessment.id}_{assessment.updated_at.isoformat()}",
+    )
         
     await db.commit()
     await db.refresh(assessment)
     
-    try:
-        event_bus = get_event_bus()
-        await event_bus.publish(Event(
-            event_type=EventType.ASSESSMENT_UPDATED,
-            source_module="assessment",
-            payload={
-                "assessment_id": str(assessment.id),
-                "patient_id": str(assessment.patient_id),
-            }
-        ))
-    except Exception as e:
-        logger.error("event_publish_failed", error=str(e))
-    
-    return {
-        "code": 200,
-        "message": "success",
-        "data": AssessmentContract.model_validate(assessment).model_dump()
-    }
+    return ok(AssessmentResponse.model_validate(assessment).model_dump())
 
 
-@router.delete("/{assessment_id}", response_model=dict, dependencies=[depends_module])
+@router.delete("/{assessment_id}", response_model=dict)
 async def delete_assessment(
     assessment_id: uuid.UUID,
-    db: AsyncSession = Depends(get_db),
-    current_user = Depends(get_current_user),
+    db: AsyncSession = Depends(get_tenant_db),
+    current_user: User = Depends(require_permission("assessment:delete")),
 ):
-    """删除评估"""
-    assessment = await db.scalar(
-        select(Assessment).where(Assessment.id == assessment_id, Assessment.is_deleted == False)
-    )
+    assessment = await db.scalar(select(Assessment).where(Assessment.id == assessment_id, Assessment.is_deleted == False))
     if not assessment:
         raise HTTPException(status_code=404, detail="Assessment not found")
         
     assessment.soft_delete()
+    await db.flush()
+    
+    await publish_event(
+        db=db,
+        event_type=EventType.ASSESSMENT_DELETED,
+        source_module="assessment",
+        payload={
+            "assessment_id": str(assessment.id),
+            "patient_id": str(assessment.patient_id),
+            "tenant_id": str(assessment.tenant_id),
+            "deleted": True,
+        },
+        idempotency_key=f"assessment_deleted_{assessment.id}",
+    )
+    
     await db.commit()
     
-    return {
-        "code": 200,
-        "message": "success",
-        "data": None
-    }
+    return deleted()
