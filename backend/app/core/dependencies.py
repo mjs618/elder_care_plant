@@ -116,10 +116,19 @@ async def get_tenant_db(
     """
     Yields an AsyncSession pre-configured with the current user's tenant RLS context.
     This makes all subsequent queries automatically scoped to the tenant.
+    
+    For platform admins (scope=PLATFORM), returns a regular session without RLS context.
     """
-    if not current_user.tenant_id:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenant associated with user")
     async with AsyncSessionLocal() as session:
+        if current_user.scope == UserScope.PLATFORM:
+            try:
+                yield session
+            finally:
+                pass
+            return
+            
+        if not current_user.tenant_id:
+            raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="No tenant associated with user")
         await _set_tenant_context(session, str(current_user.tenant_id))
         try:
             yield session

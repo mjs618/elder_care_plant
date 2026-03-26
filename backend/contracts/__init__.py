@@ -3,7 +3,8 @@
 提供模块间通信的标准化接口
 """
 from typing import Dict, Type
-from contracts.base import BaseContract, ContractClient
+from contracts.base import BaseContract, ContractClient, ContractVersion
+from contracts.registry import ContractRegistry, register_all_contracts, get_contract
 
 
 _contract_registry: Dict[str, Type[BaseContract]] = {}
@@ -20,7 +21,7 @@ def register_client(module_slug: str, client_class: Type[ContractClient]):
     _client_registry[module_slug] = client_class
 
 
-def get_contract(module_slug: str) -> Type[BaseContract]:
+def get_contract_class(module_slug: str) -> Type[BaseContract]:
     """获取模块契约类"""
     if module_slug not in _contract_registry:
         raise KeyError(f"Contract not found for module: {module_slug}")
@@ -45,12 +46,16 @@ register_client("assessment", AssessmentClient)
 __all__ = [
     "BaseContract",
     "ContractClient",
+    "ContractVersion",
+    "ContractRegistry",
     "PatientContract",
     "PatientClient",
     "AssessmentContract",
     "AssessmentClient",
     "register_contract",
     "register_client",
-    "get_contract",
+    "get_contract_class",
     "get_client",
+    "get_contract",
+    "register_all_contracts",
 ]

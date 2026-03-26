@@ -8,13 +8,11 @@ import { fileURLToPath, URL } from 'node:url'
 export default defineConfig({
     plugins: [
         vue(),
-        // Auto-import Vue 3 composables & Element Plus APIs
         AutoImport({
             imports: ['vue', 'vue-router', 'pinia'],
             resolvers: [ElementPlusResolver()],
             dts: 'src/auto-imports.d.ts',
         }),
-        // Auto-import Element Plus components
         Components({
             resolvers: [ElementPlusResolver()],
             dts: 'src/components.d.ts',
@@ -37,5 +35,31 @@ export default defineConfig({
                 changeOrigin: true,
             },
         },
+    },
+    build: {
+        target: 'es2022',
+        minify: 'terser',
+        terserOptions: {
+            compress: {
+                drop_console: true,
+                drop_debugger: true,
+            },
+        },
+        rollupOptions: {
+            output: {
+                manualChunks: {
+                    'vue-vendor': ['vue', 'vue-router', 'pinia'],
+                    'element-plus': ['element-plus', '@element-plus/icons-vue'],
+                    'echarts': ['echarts', 'vue-echarts'],
+                    'utils': ['axios', 'dayjs', 'nprogress'],
+                },
+            },
+        },
+        chunkSizeWarningLimit: 500,
+        sourcemap: false,
+        reportCompressedSize: true,
+    },
+    optimizeDeps: {
+        include: ['vue', 'vue-router', 'pinia', 'element-plus', 'axios'],
     },
 })

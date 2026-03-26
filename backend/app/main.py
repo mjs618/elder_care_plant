@@ -4,18 +4,20 @@ Assembles the FastAPI application with:
   - Lifespan context (DB init, module registry boot, super-admin bootstrap)
   - Core API routers (auth, tenants, platform admin)
   - Middleware stack
-  - Health check endpoint
+  - Health check endpoints (live, ready, full)
   - Event bus initialization
   - Background tasks for outbox processing
+  - Service monitoring and auto-recovery
+  - Global exception handlers
 """
 from contextlib import asynccontextmanager
 
 import structlog
 from fastapi import FastAPI
-from fastapi.responses import JSONResponse
 
 from app.core.config import get_settings
 from app.core.middleware import register_middleware
+from app.core.exceptions import register_exception_handlers
 from app.core.module_registry import CORE_MODULES, module_registry
 from shared.event_bus import init_event_bus, get_event_bus
 
@@ -29,7 +31,16 @@ async def lifespan(app: FastAPI):
     Application startup / shutdown handler.
     Runs once when the server starts and once when it shuts down.
     """
-    log.info("elder_care_startup", env=settings.APP_ENV, version=settings.APP_VERSION)
+    log.info(
+        "elder_care_startup",
+        env=settings.APP_ENV,
+        version=settings.APP_VERSION,
+        debug=settings.DEBUG,
+    )
+
+    from app.core.service_monitor import start_service_monitor, stop_service_monitor
+    await start_service_monitor()
+    log.info("service_monitor_started")
 
     if settings.RABBITMQ_URL:
         try:
@@ -64,7 +75,18 @@ async def lifespan(app: FastAPI):
 
     yield
 
-    log.info("elder_care_shutdown")
+    log.info("elder_care_shutdown_initiated")
+    
+    await stop_service_monitor()
+    log.info("service_monitor_stopped")
+    
+    try:
+        event_bus = get_event_bus()
+        await event_bus.disconnect()
+        log.info("event_bus_disconnected")
+    except Exception:
+        pass
+    log.info("elder_care_shutdown_complete")
 
 
 def create_app() -> FastAPI:
@@ -78,19 +100,19 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # ── Middleware ────────────────────────────────────────────────────────────
     register_middleware(app)
+    register_exception_handlers(app)
 
-    # ── Core routers (always mounted, not behind module gate) ─────────────────
-    from app.api.v1 import auth, tenants, platform_admin
+    from app.api.v1 import auth, tenants, platform_admin, monitoring, versions, modules
     app.include_router(auth.router,           prefix="/api/v1/auth",    tags=["认证"])
     app.include_router(tenants.router,        prefix="/api/v1/tenants", tags=["租户管理"])
     app.include_router(platform_admin.router, prefix="/api/v1/admin",   tags=["平台运营"])
+    app.include_router(monitoring.router,     prefix="/api/v1",         tags=["监控"])
+    app.include_router(versions.router,       prefix="/api/v1",         tags=["版本管理"])
+    app.include_router(modules.router,        prefix="/api/v1/modules", tags=["模块管理"])
 
-    # ── Health check ──────────────────────────────────────────────────────────
-    @app.get("/health", include_in_schema=False)
-    async def health():
-        return JSONResponse({"status": "ok", "version": settings.APP_VERSION})
+    from app.core.health import router as health_router
+    app.include_router(health_router, tags=["健康检查"])
 
     @app.get("/api/v1/modules", tags=["平台运营"])
     async def list_modules():

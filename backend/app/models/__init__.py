@@ -5,3 +5,14 @@ from app.models.user import User, Role, Permission, UserRole, RolePermission, AP
 from app.models.patient import Patient  # noqa: F401
 from app.models.assessment import Assessment  # noqa: F401
 from app.models.outbox import EventOutbox, OutboxStatus, ProcessedEvent  # noqa: F401
+from app.models.version import (  # noqa: F401
+    PlatformVersion,
+    VersionChangelog,
+    ModuleVersion,
+    VersionCompatibility,
+    TenantVersionBinding,
+    VersionRollback,
+    VersionStatus,
+    ChangeType,
+    CompatibilityLevel,
+)

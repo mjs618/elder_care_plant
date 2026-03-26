@@ -35,6 +35,7 @@ async def module_lifespan(app: FastAPI):
 def create_module_app() -> FastAPI:
     """
     创建模块应用
+    用于独立部署场景
     """
     app = FastAPI(
         title="患者管理模块",

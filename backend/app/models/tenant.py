@@ -97,3 +97,28 @@ class TenantModule(BaseModel):
     is_active: Mapped[bool] = mapped_column(default=True, nullable=False)
 
     tenant: Mapped[Tenant] = relationship(back_populates="activated_modules")
+
+
+class SystemModule(BaseModel):
+    """
+    System-level module registry for platform management.
+    Stores module metadata, status, and version information.
+    """
+    __tablename__ = "system_modules"
+
+    slug: Mapped[str] = mapped_column(
+        String(100), unique=True, nullable=False, index=True,
+        comment="Module unique identifier, e.g. 'patient_mgmt'"
+    )
+    display_name: Mapped[str] = mapped_column(String(200), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text, nullable=True)
+    version: Mapped[str] = mapped_column(String(50), default="1.0.0", nullable=False)
+    permissions: Mapped[str] = mapped_column(
+        Text, default="", nullable=False,
+        comment="Comma-separated list of permission codes"
+    )
+    router_prefix: Mapped[str] = mapped_column(String(200), nullable=False)
+    is_enabled: Mapped[bool] = mapped_column(default=True, nullable=False)
+    disable_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    changelog: Mapped[str | None] = mapped_column(Text, nullable=True)
+    updated_by: Mapped[str | None] = mapped_column(String(100), nullable=True)

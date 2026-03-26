@@ -5,6 +5,7 @@ Handles:
   - Structured request logging
   - Rate limiting by tenant SLA tier
   - Security headers
+  - Request metrics collection
 """
 import time
 import uuid
@@ -39,6 +40,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     """
     Injects a unique request ID and start timestamp into request.state.
     Also logs each request with its duration on completion.
+    Tracks request metrics for monitoring.
     """
 
     async def dispatch(self, request: Request, call_next) -> Response:
@@ -56,8 +58,11 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 request.state.user_id = payload.get("sub")
                 request.state.tenant_id = payload.get("tid")
             except JWTError:
-                # Auth failures are handled later by the auth dependencies.
                 pass
+
+        from app.core.metrics import request_tracker, performance_monitor
+        start_time = request_tracker.start_request(request_id)
+        performance_monitor.record_request()
 
         with structlog.contextvars.bound_contextvars(
             request_id=request_id,
@@ -66,6 +71,20 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         ):
             response = await call_next(request)
             duration_ms = (time.perf_counter() - request.state.start_time) * 1000
+            
+            request_tracker.end_request(
+                request_id=request_id,
+                method=request.method,
+                path=request.url.path,
+                status_code=response.status_code,
+                start_time=start_time,
+            )
+            
+            performance_monitor.record_response_time((time.perf_counter() - start_time))
+            
+            if response.status_code >= 400:
+                performance_monitor.record_error()
+            
             log.info(
                 "request_completed",
                 status_code=response.status_code,

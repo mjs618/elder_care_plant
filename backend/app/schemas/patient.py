@@ -20,7 +20,7 @@ class PatientBase(BaseModel):
 
 
 class PatientCreate(PatientBase):
-    pass
+    tenant_id: Optional[uuid.UUID] = Field(None, description="租户ID，平台管理员创建时需要指定")
 
 
 class PatientUpdate(BaseModel):

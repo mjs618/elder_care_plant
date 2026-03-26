@@ -24,6 +24,8 @@ tenacity = "^8.3.0"
 structlog = "^24.2.0"
 slowapi = "^0.1.9"
 aio-pika = "^9.4.0"
+psutil = "^6.0.0"
+aiohttp = "^3.9.0"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^8.2.1"

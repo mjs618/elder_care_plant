@@ -22,7 +22,11 @@ class Patient(TenantBaseModel):
 
     full_name: Mapped[str] = mapped_column(String(100), nullable=False, index=True)
     id_card_num: Mapped[str | None] = mapped_column(String(50), nullable=True, unique=True)
-    gender: Mapped[Gender] = mapped_column(Enum(Gender), default=Gender.OTHER, nullable=False)
+    gender: Mapped[Gender] = mapped_column(
+        Enum(Gender, values_callable=lambda x: [e.value for e in x]),
+        default=Gender.OTHER,
+        nullable=False
+    )
     date_of_birth: Mapped[date | None] = mapped_column(Date, nullable=True)
     contact_phone: Mapped[str | None] = mapped_column(String(20), nullable=True)
     emergency_contact: Mapped[str | None] = mapped_column(String(100), nullable=True)

@@ -300,3 +300,33 @@ async def init_event_bus(rabbitmq_url: str) -> EventBus:
     _event_bus = EventBus(rabbitmq_url)
     await _event_bus.connect()
     return _event_bus
+
+
+async def publish_event(
+    db: AsyncSession,
+    event_type: EventType | str,
+    source_module: str,
+    payload: dict[str, Any],
+    idempotency_key: str | None = None,
+) -> "EventOutbox":
+    """
+    统一的事件发布辅助函数
+    
+    Args:
+        db: 数据库会话
+        event_type: 事件类型
+        source_module: 来源模块
+        payload: 事件载荷
+        idempotency_key: 幂等性键，如不提供则自动生成
+    
+    Returns:
+        EventOutbox: 保存的 Outbox 记录
+    """
+    outbox_service = OutboxService(db)
+    event = Event(
+        event_type=event_type,
+        source_module=source_module,
+        payload=payload,
+        idempotency_key=idempotency_key,
+    )
+    return await outbox_service.save_to_outbox(event)
