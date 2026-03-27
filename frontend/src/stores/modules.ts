@@ -44,10 +44,12 @@ export const useModuleStore = defineStore('modules', () => {
             })
     })
 
-    async function loadModules(tenantActiveSlugs?: string[]) {
+    async function loadModules() {
         const res = await modulesApi.list()
         allModules.value = (res as any).data ?? res
-        activeSlugs.value = new Set(tenantActiveSlugs ?? allModules.value.map((m) => m.slug))
+        activeSlugs.value = new Set(
+            allModules.value.filter((module) => module.is_active).map((module) => module.slug),
+        )
         isLoaded.value = true
     }
 
@@ -55,5 +57,11 @@ export const useModuleStore = defineStore('modules', () => {
         return activeSlugs.value.has(slug)
     }
 
-    return { allModules, activeSlugs, isLoaded, navItems, loadModules, hasModule }
+    function reset() {
+        allModules.value = []
+        activeSlugs.value = new Set()
+        isLoaded.value = false
+    }
+
+    return { allModules, activeSlugs, isLoaded, navItems, loadModules, hasModule, reset }
 })

@@ -44,6 +44,7 @@ export const useUserStore = defineStore('user', () => {
         const res = await authApi.refresh(refreshToken.value)
         const tokens = (res as any).data ?? res
         setTokens(tokens.access_token, tokens.refresh_token)
+        return tokens.access_token
     }
 
     function setTokens(access: string, refresh: string) {
@@ -53,13 +54,32 @@ export const useUserStore = defineStore('user', () => {
         localStorage.setItem(REFRESH_KEY, refresh)
     }
 
-    function logout() {
+    function clearSession() {
         accessToken.value = null
         refreshToken.value = null
         profile.value = null
         permissions.value = []
         localStorage.removeItem(TOKEN_KEY)
         localStorage.removeItem(REFRESH_KEY)
+        void import('@/stores/modules').then(({ useModuleStore }) => {
+            useModuleStore().reset()
+        })
+        void import('@/stores/theme').then(({ useThemeStore }) => {
+            useThemeStore().resetTheme()
+        })
+    }
+
+    async function logout() {
+        const token = refreshToken.value
+        try {
+            if (token) {
+                await authApi.logout(token)
+            }
+        } catch {
+            // Best-effort remote logout.
+        } finally {
+            clearSession()
+        }
     }
 
     function getToken() {
@@ -70,6 +90,6 @@ export const useUserStore = defineStore('user', () => {
         accessToken, refreshToken, profile, permissions,
         isLoggedIn, isPlatformAdmin, tenantId,
         hasPermission, login, fetchProfile, refreshAccessToken,
-        setTokens, logout, getToken,
+        setTokens, clearSession, logout, getToken,
     }
 })

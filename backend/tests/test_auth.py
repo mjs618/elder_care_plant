@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.v1.auth import (
     login,
     refresh,
+    logout,
     me,
     _check_login_attempts,
     _record_login_failure,
@@ -50,7 +51,7 @@ class TestLoginSecurity:
              patch("app.api.v1.auth._clear_login_failures", new_callable=AsyncMock), \
              patch("app.api.v1.auth.verify_password", return_value=True), \
              patch("app.api.v1.auth.create_access_token", return_value="access_token"), \
-             patch("app.api.v1.auth.create_refresh_token", return_value="refresh_token"):
+             patch("app.api.v1.auth._issue_refresh_token", new_callable=AsyncMock, return_value="refresh_token"):
             
             mock_result = MagicMock()
             mock_result.scalar_one_or_none.return_value = mock_user
@@ -161,16 +162,21 @@ class TestTokenRefresh:
         user = MagicMock(spec=User)
         user.id = uuid.uuid4()
         user.is_active = True
+        user.is_deleted = False
         user.tenant_id = uuid.uuid4()
         return user
     
     @pytest.mark.asyncio
     async def test_refresh_success(self, mock_db, mock_user):
         with patch("app.api.v1.auth.decode_token") as mock_decode, \
-             patch("app.api.v1.auth.create_access_token", return_value="new_access"), \
-             patch("app.api.v1.auth.create_refresh_token", return_value="new_refresh"):
+             patch("app.api.v1.auth._get_refresh_token_record", new_callable=AsyncMock), \
+             patch("app.api.v1.auth._issue_refresh_token", new_callable=AsyncMock, return_value="new_refresh"), \
+             patch("app.api.v1.auth.create_access_token", return_value="new_access"):
             
-            mock_decode.return_value = {"type": "refresh", "sub": str(mock_user.id)}
+            mock_decode.side_effect = [
+                {"type": "refresh", "sub": str(mock_user.id), "jti": "old-token"},
+                {"type": "refresh", "sub": str(mock_user.id), "jti": "new-token"},
+            ]
             
             mock_result = MagicMock()
             mock_result.scalar_one_or_none.return_value = mock_user
@@ -196,8 +202,9 @@ class TestTokenRefresh:
     
     @pytest.mark.asyncio
     async def test_refresh_user_not_found(self, mock_db):
-        with patch("app.api.v1.auth.decode_token") as mock_decode:
-            mock_decode.return_value = {"type": "refresh", "sub": "user_id"}
+        with patch("app.api.v1.auth.decode_token") as mock_decode, \
+             patch("app.api.v1.auth._get_refresh_token_record", new_callable=AsyncMock):
+            mock_decode.return_value = {"type": "refresh", "sub": "user_id", "jti": "token-id"}
             
             mock_result = MagicMock()
             mock_result.scalar_one_or_none.return_value = None
@@ -209,3 +216,14 @@ class TestTokenRefresh:
                 await refresh(body, mock_db)
             
             assert exc_info.value.status_code == 401
+
+    @pytest.mark.asyncio
+    async def test_logout_revokes_refresh_token(self, mock_db):
+        mock_record = MagicMock()
+        with patch("app.api.v1.auth.decode_token", return_value={"type": "refresh", "sub": "user", "jti": "token-id"}), \
+             patch("app.api.v1.auth._get_refresh_token_record", new_callable=AsyncMock, return_value=mock_record):
+            body = RefreshRequest(refresh_token="valid_refresh_token")
+            result = await logout(body, mock_db)
+
+            assert result["code"] == 200
+            assert mock_record.revoked_at is not None

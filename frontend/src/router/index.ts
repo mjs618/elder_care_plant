@@ -173,7 +173,7 @@ router.beforeEach(async (to, _from, next) => {
         try {
             await userStore.fetchProfile()
         } catch {
-            userStore.logout()
+            userStore.clearSession()
             return next('/login')
         }
     }

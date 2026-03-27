@@ -7,6 +7,7 @@ Handles:
 """
 import hashlib
 import secrets
+import uuid
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -59,10 +60,11 @@ def create_access_token(
     return _create_token(data, timedelta(minutes=settings.ACCESS_TOKEN_EXPIRE_MINUTES))
 
 
-def create_refresh_token(subject: str) -> str:
+def create_refresh_token(subject: str, token_id: str | None = None) -> str:
     """Creates a long-lived refresh token."""
+    refresh_jti = token_id or str(uuid.uuid4())
     return _create_token(
-        {"sub": subject, "type": "refresh"},
+        {"sub": subject, "type": "refresh", "jti": refresh_jti},
         timedelta(days=settings.REFRESH_TOKEN_EXPIRE_DAYS),
     )
 

@@ -2,9 +2,9 @@
 Elder Care Platform - Application Factory
 Assembles the FastAPI application with:
   - Lifespan context (DB init, module registry boot, super-admin bootstrap)
-  - Core API routers (auth, tenants, platform admin)
+  - Core API routers
   - Middleware stack
-  - Health check endpoints (live, ready, full)
+  - Health check endpoints
   - Event bus initialization
   - Background tasks for outbox processing
   - Service monitoring and auto-recovery
@@ -16,10 +16,10 @@ import structlog
 from fastapi import FastAPI
 
 from app.core.config import get_settings
-from app.core.middleware import register_middleware
 from app.core.exceptions import register_exception_handlers
+from app.core.middleware import register_middleware
 from app.core.module_registry import CORE_MODULES, module_registry
-from shared.event_bus import init_event_bus, get_event_bus
+from shared.event_bus import get_event_bus, init_event_bus
 
 log = structlog.get_logger()
 settings = get_settings()
@@ -27,10 +27,6 @@ settings = get_settings()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """
-    Application startup / shutdown handler.
-    Runs once when the server starts and once when it shuts down.
-    """
     log.info(
         "elder_care_startup",
         env=settings.APP_ENV,
@@ -39,6 +35,7 @@ async def lifespan(app: FastAPI):
     )
 
     from app.core.service_monitor import start_service_monitor, stop_service_monitor
+
     await start_service_monitor()
     log.info("service_monitor_started")
 
@@ -46,22 +43,24 @@ async def lifespan(app: FastAPI):
         try:
             await init_event_bus(settings.RABBITMQ_URL)
             log.info("event_bus_initialized")
-            
+
             from app.core.background import start_background_tasks
+
             await start_background_tasks()
             log.info("background_tasks_started")
-        except Exception as e:
-            log.warning("event_bus_init_failed", error=str(e))
+        except Exception as exc:
+            log.warning("event_bus_init_failed", error=str(exc))
 
     for module_def in CORE_MODULES:
         module_registry.register(module_def)
         log.info("module_registered", slug=module_def.slug)
 
-    from app.api.v1 import patients, assessments
-    if (m := module_registry.get("patient_mgmt")):
-        m.router = patients.router
-    if (m := module_registry.get("assessment")):
-        m.router = assessments.router
+    from app.api.v1 import assessments, patients
+
+    if (module := module_registry.get("patient_mgmt")):
+        module.router = patients.router
+    if (module := module_registry.get("assessment")):
+        module.router = assessments.router
 
     for module_def in module_registry.all():
         if module_def.router is not None:
@@ -76,16 +75,16 @@ async def lifespan(app: FastAPI):
     yield
 
     log.info("elder_care_shutdown_initiated")
-    
     await stop_service_monitor()
     log.info("service_monitor_stopped")
-    
+
     try:
         event_bus = get_event_bus()
         await event_bus.disconnect()
         log.info("event_bus_disconnected")
     except Exception:
         pass
+
     log.info("elder_care_shutdown_complete")
 
 
@@ -93,7 +92,7 @@ def create_app() -> FastAPI:
     app = FastAPI(
         title=settings.APP_NAME,
         version=settings.APP_VERSION,
-        description="Commercial Elder Care Platform — Multi-tenant SaaS API",
+        description="Commercial Elder Care Platform - Multi-tenant SaaS API",
         docs_url="/api/docs" if not settings.is_production else None,
         redoc_url="/api/redoc" if not settings.is_production else None,
         openapi_url="/api/openapi.json" if not settings.is_production else None,
@@ -103,43 +102,18 @@ def create_app() -> FastAPI:
     register_middleware(app)
     register_exception_handlers(app)
 
-    from app.api.v1 import auth, tenants, platform_admin, monitoring, versions, modules
-    app.include_router(auth.router,           prefix="/api/v1/auth",    tags=["认证"])
-    app.include_router(tenants.router,        prefix="/api/v1/tenants", tags=["租户管理"])
-    app.include_router(platform_admin.router, prefix="/api/v1/admin",   tags=["平台运营"])
-    app.include_router(monitoring.router,     prefix="/api/v1",         tags=["监控"])
-    app.include_router(versions.router,       prefix="/api/v1",         tags=["版本管理"])
-    app.include_router(modules.router,        prefix="/api/v1/modules", tags=["模块管理"])
+    from app.api.v1 import auth, modules, monitoring, platform_admin, tenants, versions
+
+    app.include_router(auth.router, prefix="/api/v1/auth", tags=["auth"])
+    app.include_router(tenants.router, prefix="/api/v1/tenants", tags=["tenants"])
+    app.include_router(platform_admin.router, prefix="/api/v1/admin", tags=["platform-admin"])
+    app.include_router(monitoring.router, prefix="/api/v1", tags=["monitoring"])
+    app.include_router(versions.router, prefix="/api/v1", tags=["versions"])
+    app.include_router(modules.router, prefix="/api/v1/modules", tags=["modules"])
 
     from app.core.health import router as health_router
-    app.include_router(health_router, tags=["健康检查"])
 
-    @app.get("/api/v1/modules", tags=["平台运营"])
-    async def list_modules():
-        """Returns all registered modules. Used by frontend to build navigation."""
-        modules_data = []
-        for m in module_registry.all():
-            module_dict = {
-                "slug": m.slug,
-                "display_name": m.display_name,
-                "description": m.description,
-                "version": m.version,
-                "permissions": m.permissions,
-            }
-            if m.ui_meta:
-                module_dict["ui_meta"] = {
-                    "icon": m.ui_meta.icon,
-                    "path": m.ui_meta.path,
-                    "children": [{"title": c.title, "path": c.path} for c in m.ui_meta.children],
-                }
-            modules_data.append(module_dict)
-        
-        return {
-            "code": 200,
-            "message": "success",
-            "data": modules_data,
-        }
-
+    app.include_router(health_router, tags=["health"])
     return app
 
 

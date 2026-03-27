@@ -1,30 +1,38 @@
 /**
- * Tenant Management API - 租户管理接口
+ * Tenant management API.
  */
 import request from '@/utils/request'
+
+export type TenantStatus = 'active' | 'trial' | 'suspended' | 'cancelled'
+
+export interface TenantPlanSummary {
+    id: string | null
+    name: string | null
+    tier: string | null
+}
 
 export interface Tenant {
     id: string
     name: string
     slug: string
-    status: 'active' | 'trial' | 'suspended' | 'cancelled'
+    status: TenantStatus
     contact_email: string
+    brand_name: string | null
+    primary_color: string | null
+    created_at: string | null
+    plan: TenantPlanSummary
 }
 
 export interface TenantDetail {
     id: string
     name: string
     slug: string
-    status: 'active' | 'trial' | 'suspended' | 'cancelled'
+    status: TenantStatus
     contact_email: string
     brand_name: string | null
     primary_color: string | null
     created_at: string
-    plan: {
-        id: string
-        name: string
-        tier: string
-    }
+    plan: TenantPlanSummary
     active_modules: string[]
     user_count: number
 }
@@ -47,7 +55,7 @@ export interface UpdateTenantRequest {
 }
 
 export interface UpdateTenantStatusRequest {
-    status: 'active' | 'trial' | 'suspended' | 'cancelled'
+    status: TenantStatus
     reason?: string
 }
 
@@ -55,51 +63,53 @@ export interface UpdateTenantModulesRequest {
     module_slugs: string[]
 }
 
+export interface TenantQuery {
+    search?: string
+    status?: TenantStatus
+}
+
 export interface PageResult<T> {
     items: T[]
     total: number
     page: number
-    page_size: number
+    size: number
 }
 
 export const tenantsApi = {
-    // 租户列表
-    getTenants: (page: number = 1, pageSize: number = 20) =>
+    getTenants: (page: number = 1, pageSize: number = 20, query: TenantQuery = {}) =>
         request.get<any, { data: PageResult<Tenant> }>('/tenants', {
-            params: { page, page_size: pageSize }
+            params: {
+                page,
+                page_size: pageSize,
+                search: query.search || undefined,
+                status: query.status || undefined,
+            },
         }),
-    
-    // 租户详情
+
     getTenant: (id: string) =>
         request.get<any, { data: TenantDetail }>(`/tenants/${id}`),
-    
-    // 创建租户
+
     createTenant: (data: CreateTenantRequest) =>
         request.post<any, { data: { id: string; slug: string } }>('/tenants', data),
-    
-    // 更新租户
+
     updateTenant: (id: string, data: UpdateTenantRequest) =>
         request.put<any, { data: Tenant }>(`/tenants/${id}`, data),
-    
-    // 更新租户状态
+
     updateTenantStatus: (id: string, data: UpdateTenantStatusRequest) =>
         request.put<any, { data: { id: string; status: string; message: string } }>(
             `/tenants/${id}/status`,
-            data
+            data,
         ),
-    
-    // 删除租户
+
     deleteTenant: (id: string) =>
         request.delete<any, { data: null }>(`/tenants/${id}`),
-    
-    // 获取租户模块
+
     getTenantModules: (id: string) =>
         request.get<any, { data: { active_modules: string[] } }>(`/tenants/${id}/modules`),
-    
-    // 更新租户模块
+
     updateTenantModules: (id: string, data: UpdateTenantModulesRequest) =>
         request.put<any, { data: { message: string; active_modules: string[] } }>(
             `/tenants/${id}/modules`,
-            data
+            data,
         ),
 }
