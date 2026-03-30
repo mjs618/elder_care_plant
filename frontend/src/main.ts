@@ -34,8 +34,9 @@ import('@/stores/user').then(({ useUserStore }) => {
     const userStore = useUserStore()
     setupRequestInterceptors(
         () => userStore.getToken(),
+        () => userStore.refreshAccessToken(),
         () => {
-            userStore.logout()
+            userStore.clearSession()
             router.push('/login')
         },
     )

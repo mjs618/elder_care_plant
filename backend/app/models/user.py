@@ -7,9 +7,10 @@ Supports:
   - API key authentication for 3rd-party integrations
 """
 import uuid
+from datetime import datetime
 from enum import Enum as PyEnum
 
-from sqlalchemy import Boolean, Enum, ForeignKey, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, String, Text
 from sqlalchemy.dialects.postgresql import UUID
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -52,6 +53,7 @@ class User(BaseModel):
 
     # API keys for 3rd-party / integration use
     api_keys: Mapped[list["APIKey"]] = relationship(back_populates="user")
+    refresh_tokens: Mapped[list["RefreshToken"]] = relationship(back_populates="user")
 
 
 class Role(BaseModel):
@@ -135,3 +137,26 @@ class APIKey(BaseModel):
     is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
     user: Mapped[User] = relationship(back_populates="api_keys")
+
+
+class RefreshToken(BaseModel):
+    """
+    Server-side refresh token registry.
+    Tokens are JWTs, but each issued token is tracked by `token_jti`
+    so logout and rotation can revoke them immediately.
+    """
+
+    __tablename__ = "refresh_tokens"
+
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("users.id"), nullable=False, index=True
+    )
+    tenant_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True), ForeignKey("tenants.id"), nullable=True, index=True
+    )
+    token_jti: Mapped[str] = mapped_column(String(36), unique=True, nullable=False, index=True)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    replaced_by_jti: Mapped[str | None] = mapped_column(String(36), nullable=True)
+
+    user: Mapped[User] = relationship(back_populates="refresh_tokens")

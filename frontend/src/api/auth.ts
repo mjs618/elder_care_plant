@@ -22,6 +22,7 @@ export interface UserProfile {
     scope: 'platform' | 'tenant'
     tenant_id: string | null
     permissions: string[]
+    active_modules: string[]
 }
 
 export const authApi = {
@@ -30,6 +31,9 @@ export const authApi = {
 
     refresh: (refresh_token: string) =>
         request.post<any, { data: TokenPair }>('/auth/refresh', { refresh_token }),
+
+    logout: (refresh_token: string) =>
+        request.post<any, { data: null }>('/auth/logout', { refresh_token }),
 
     me: () =>
         request.get<any, { data: UserProfile }>('/auth/me'),
@@ -51,10 +55,11 @@ export interface ModuleInfo {
     description: string
     version: string
     permissions: string[]
+    is_active: boolean
     ui_meta?: UIMeta
 }
 
 export const modulesApi = {
     list: () =>
-        request.get<any, { data: ModuleInfo[] }>('/modules'),
+        request.get<any, { data: ModuleInfo[] }>('/auth/modules'),
 }

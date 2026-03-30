@@ -1,5 +1,5 @@
 /**
- * Platform Admin API - 运营控制台接口
+ * Platform admin API.
  */
 import request from '@/utils/request'
 
@@ -9,14 +9,22 @@ export interface PlatformStats {
     registered_modules: string[]
 }
 
+export interface TenantSeriesPoint {
+    date: string
+    new_tenants: number
+    total_tenants: number
+}
+
 export interface PlatformStatsDetail {
     tenants: {
         total: number
         active: number
         trial: number
         suspended: number
+        cancelled: number
         new_this_month: number
     }
+    tenant_series: TenantSeriesPoint[]
     modules: Record<string, number>
     total_plans: number
     total_users: number
@@ -31,6 +39,8 @@ export interface Plan {
     max_users: number
     max_patients: number
     included_modules: string
+    tenant_count: number
+    active_tenant_count: number
 }
 
 export interface CreatePlanRequest {
@@ -54,26 +64,26 @@ export interface UpdatePlanRequest {
 }
 
 export const platformApi = {
-    // 统计
     getStats: () =>
         request.get<any, { data: PlatformStats }>('/admin/stats'),
-    
-    getStatsDetail: () =>
-        request.get<any, { data: PlatformStatsDetail }>('/admin/stats/detail'),
-    
-    // 套餐管理
+
+    getStatsDetail: (days: 7 | 30 | 90 = 30) =>
+        request.get<any, { data: PlatformStatsDetail }>('/admin/stats/detail', {
+            params: { days },
+        }),
+
     getPlans: () =>
         request.get<any, { data: Plan[] }>('/admin/plans'),
-    
+
     getPlan: (id: string) =>
         request.get<any, { data: Plan }>(`/admin/plans/${id}`),
-    
+
     createPlan: (data: CreatePlanRequest) =>
         request.post<any, { data: Plan }>('/admin/plans', data),
-    
+
     updatePlan: (id: string, data: UpdatePlanRequest) =>
         request.put<any, { data: Plan }>(`/admin/plans/${id}`, data),
-    
+
     deletePlan: (id: string) =>
         request.delete<any, { data: null }>(`/admin/plans/${id}`),
 }

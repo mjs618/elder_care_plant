@@ -47,11 +47,28 @@ export default defineConfig({
         },
         rollupOptions: {
             output: {
-                manualChunks: {
-                    'vue-vendor': ['vue', 'vue-router', 'pinia'],
-                    'element-plus': ['element-plus', '@element-plus/icons-vue'],
-                    'echarts': ['echarts', 'vue-echarts'],
-                    'utils': ['axios', 'dayjs', 'nprogress'],
+                manualChunks(id) {
+                    if (!id.includes('node_modules')) {
+                        return
+                    }
+
+                    const normalizedId = id.replace(/\\/g, '/')
+
+                    if (
+                        normalizedId.includes('/node_modules/vue/') ||
+                        normalizedId.includes('/node_modules/vue-router/') ||
+                        normalizedId.includes('/node_modules/pinia/')
+                    ) {
+                        return 'vue-vendor'
+                    }
+
+                    if (
+                        normalizedId.includes('/node_modules/axios/') ||
+                        normalizedId.includes('/node_modules/dayjs/') ||
+                        normalizedId.includes('/node_modules/nprogress/')
+                    ) {
+                        return 'utils'
+                    }
                 },
             },
         },

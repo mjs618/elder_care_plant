@@ -9,8 +9,8 @@ from alembic import context
 
 # Import all models so Alembic can detect them
 from app.models.base import Base
-from app.models.tenant import SubscriptionPlan, Tenant, TenantModule
-from app.models.user import User, Role, Permission, UserRole, RolePermission, APIKey
+from app.models.tenant import SubscriptionPlan, Tenant, TenantModule, SystemModule
+from app.models.user import User, Role, Permission, UserRole, RolePermission, APIKey, RefreshToken
 from app.models.patient import Patient
 from app.models.assessment import Assessment
 from app.models.outbox import EventOutbox, ProcessedEvent

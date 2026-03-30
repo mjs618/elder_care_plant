@@ -154,7 +154,7 @@ async function handleUserCmd(cmd: string) {
   else if (cmd === 'tenant') router.push('/')
   else if (cmd === 'logout') {
     await ElMessageBox.confirm('确认退出登录？', '退出', { type: 'warning' })
-    userStore.logout()
+    await userStore.logout()
     router.push('/login')
   }
 }

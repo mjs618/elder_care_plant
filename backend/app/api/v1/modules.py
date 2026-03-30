@@ -8,14 +8,15 @@ Provides platform-level module management:
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_platform_admin
-from app.core.module_registry import module_registry, CORE_MODULES
+from app.core.exceptions import ConflictError, NotFoundError
+from app.core.module_registry import ModuleDefinition, module_registry
 from app.models.tenant import TenantModule, SystemModule
 from app.schemas.response import ok
 
@@ -32,32 +33,61 @@ class ModuleVersionUpdateRequest(BaseModel):
     changelog: Optional[str] = None
 
 
-async def _get_or_create_system_module(db: AsyncSession, slug: str) -> SystemModule:
-    """Get or create a system module record"""
-    result = await db.execute(select(SystemModule).where(SystemModule.slug == slug))
-    module = result.scalar_one_or_none()
-    
+def _require_registry_module(slug: str) -> ModuleDefinition:
+    module = module_registry.get(slug)
     if not module:
-        # Get module info from registry
-        registry_module = module_registry.get(slug)
-        if not registry_module:
-            raise HTTPException(status_code=404, detail=f"Module '{slug}' not found in registry")
-        
-        # Create new system module record
-        module = SystemModule(
-            slug=slug,
-            display_name=registry_module.display_name,
-            description=registry_module.description,
-            version=registry_module.version,
-            permissions=",".join(registry_module.permissions),
-            router_prefix=registry_module.router_prefix,
-            is_enabled=True,
-        )
-        db.add(module)
-        await db.commit()
-        await db.refresh(module)
-    
+        raise NotFoundError("Module", slug)
     return module
+
+
+async def _get_system_module(db: AsyncSession, slug: str) -> SystemModule | None:
+    result = await db.execute(select(SystemModule).where(SystemModule.slug == slug))
+    return result.scalar_one_or_none()
+
+
+async def _sync_system_module(
+    db: AsyncSession,
+    module: ModuleDefinition,
+    existing: SystemModule | None = None,
+) -> SystemModule:
+    system_module = existing or SystemModule(
+        slug=module.slug,
+        display_name=module.display_name,
+        description=module.description,
+        version=module.version,
+        permissions=",".join(module.permissions),
+        router_prefix=module.router_prefix,
+        is_enabled=True,
+    )
+    if existing is None:
+        db.add(system_module)
+
+    system_module.display_name = module.display_name
+    system_module.description = module.description
+    system_module.version = module.version
+    system_module.permissions = ",".join(module.permissions)
+    system_module.router_prefix = module.router_prefix
+    return system_module
+
+
+def _serialize_module_summary(
+    module: ModuleDefinition,
+    system_module: SystemModule | None,
+    tenant_count: int,
+) -> dict:
+    return {
+        "slug": module.slug,
+        "display_name": module.display_name,
+        "description": module.description,
+        "version": system_module.version if system_module else module.version,
+        "permissions": module.permissions,
+        "router_prefix": module.router_prefix,
+        "is_enabled": system_module.is_enabled if system_module else True,
+        "tenant_count": tenant_count,
+        "created_at": system_module.created_at.isoformat() if system_module and system_module.created_at else None,
+        "updated_at": system_module.updated_at.isoformat() if system_module and system_module.updated_at else None,
+        "disable_reason": system_module.disable_reason if system_module else None,
+    }
 
 
 @router.get("", summary="获取所有模块列表")
@@ -78,7 +108,7 @@ async def list_modules(
             select(
                 TenantModule.module_slug,
                 func.count().label("tenant_count")
-            ).where(TenantModule.is_active == True)
+            ).where(TenantModule.is_active.is_(True))
             .group_by(TenantModule.module_slug)
         )
         tenant_counts = {row.module_slug: row.tenant_count for row in result}
@@ -90,23 +120,9 @@ async def list_modules(
     modules_data = []
     for mod in modules:
         sys_mod = system_modules.get(mod.slug)
-        if not sys_mod:
-            # Auto-create system module record
-            sys_mod = await _get_or_create_system_module(db, mod.slug)
-        
-        modules_data.append({
-            "slug": mod.slug,
-            "display_name": mod.display_name,
-            "description": mod.description,
-            "version": sys_mod.version if sys_mod else mod.version,
-            "permissions": mod.permissions,
-            "router_prefix": mod.router_prefix,
-            "is_enabled": sys_mod.is_enabled if sys_mod else True,
-            "tenant_count": tenant_counts.get(mod.slug, 0),
-            "created_at": sys_mod.created_at.isoformat() if sys_mod and sys_mod.created_at else None,
-            "updated_at": sys_mod.updated_at.isoformat() if sys_mod and sys_mod.updated_at else None,
-            "disable_reason": sys_mod.disable_reason if sys_mod else None,
-        })
+        modules_data.append(
+            _serialize_module_summary(mod, sys_mod, tenant_counts.get(mod.slug, 0))
+        )
     
     return ok(modules_data)
 
@@ -120,26 +136,23 @@ async def get_module(
     """
     Returns detailed information about a specific module.
     """
-    module = module_registry.get(slug)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found")
+    module = _require_registry_module(slug)
     
     # Get tenant count
     tenant_count = await db.scalar(
         select(func.count()).where(
             TenantModule.module_slug == slug,
-            TenantModule.is_active == True
+            TenantModule.is_active.is_(True)
         )
     )
     
-    # Get system module record
-    sys_mod = await _get_or_create_system_module(db, slug)
+    sys_mod = await _get_system_module(db, slug)
     
     return ok({
         "slug": module.slug,
         "display_name": module.display_name,
         "description": module.description,
-        "version": sys_mod.version,
+        "version": sys_mod.version if sys_mod else module.version,
         "permissions": module.permissions,
         "router_prefix": module.router_prefix,
         "router_tags": module.router_tags,
@@ -151,12 +164,12 @@ async def get_module(
                 for c in (module.ui_meta.children if module.ui_meta else [])
             ],
         } if module.ui_meta else None,
-        "is_enabled": sys_mod.is_enabled,
+        "is_enabled": sys_mod.is_enabled if sys_mod else True,
         "tenant_count": tenant_count or 0,
-        "created_at": sys_mod.created_at.isoformat() if sys_mod.created_at else None,
-        "updated_at": sys_mod.updated_at.isoformat() if sys_mod.updated_at else None,
-        "disable_reason": sys_mod.disable_reason,
-        "changelog": sys_mod.changelog,
+        "created_at": sys_mod.created_at.isoformat() if sys_mod and sys_mod.created_at else None,
+        "updated_at": sys_mod.updated_at.isoformat() if sys_mod and sys_mod.updated_at else None,
+        "disable_reason": sys_mod.disable_reason if sys_mod else None,
+        "changelog": sys_mod.changelog if sys_mod else None,
     })
 
 
@@ -171,14 +184,21 @@ async def update_module_status(
     Enable or disable a module globally.
     Disabled modules cannot be activated by tenants.
     """
-    module = module_registry.get(slug)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found")
-    
-    # Get or create system module record
-    sys_mod = await _get_or_create_system_module(db, slug)
-    
-    # Update status
+    module = _require_registry_module(slug)
+    sys_mod = await _sync_system_module(db, module, await _get_system_module(db, slug))
+
+    if not body.is_enabled:
+        active_tenant_count = await db.scalar(
+            select(func.count()).where(
+                TenantModule.module_slug == slug,
+                TenantModule.is_active.is_(True),
+            )
+        )
+        if active_tenant_count:
+            raise ConflictError(
+                f"Module '{slug}' cannot be disabled while tenants still have it activated"
+            )
+
     sys_mod.is_enabled = body.is_enabled
     sys_mod.disable_reason = body.reason if not body.is_enabled else None
     
@@ -202,12 +222,8 @@ async def update_module_version(
     """
     Update module version and changelog.
     """
-    module = module_registry.get(slug)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found")
-    
-    # Get or create system module record
-    sys_mod = await _get_or_create_system_module(db, slug)
+    module = _require_registry_module(slug)
+    sys_mod = await _sync_system_module(db, module, await _get_system_module(db, slug))
     
     # Update version
     sys_mod.version = body.version
@@ -233,15 +249,13 @@ async def get_module_stats(
     """
     Returns usage statistics for a specific module.
     """
-    module = module_registry.get(slug)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found")
+    module = _require_registry_module(slug)
     
     # Get active tenant count
     active_count = await db.scalar(
         select(func.count()).where(
             TenantModule.module_slug == slug,
-            TenantModule.is_active == True
+            TenantModule.is_active.is_(True)
         )
     )
     
@@ -281,12 +295,8 @@ async def reload_module(
     Reload a module (useful after configuration changes).
     Note: This is a placeholder for future hot-reload functionality.
     """
-    module = module_registry.get(slug)
-    if not module:
-        raise HTTPException(status_code=404, detail="Module not found")
-    
-    # Get or create system module record
-    sys_mod = await _get_or_create_system_module(db, slug)
+    module = _require_registry_module(slug)
+    sys_mod = await _sync_system_module(db, module, await _get_system_module(db, slug))
     
     await db.commit()
     await db.refresh(sys_mod)
@@ -312,19 +322,9 @@ async def sync_modules(
     for mod in modules:
         result = await db.execute(select(SystemModule).where(SystemModule.slug == mod.slug))
         existing = result.scalar_one_or_none()
-        
         if not existing:
-            sys_mod = SystemModule(
-                slug=mod.slug,
-                display_name=mod.display_name,
-                description=mod.description,
-                version=mod.version,
-                permissions=",".join(mod.permissions),
-                router_prefix=mod.router_prefix,
-                is_enabled=True,
-            )
-            db.add(sys_mod)
             created_count += 1
+        await _sync_system_module(db, mod, existing)
     
     await db.commit()
     

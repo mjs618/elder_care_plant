@@ -1,5 +1,5 @@
 /**
- * Module Management API - 模块管理接口
+ * Platform module registry API.
  */
 import request from '@/utils/request'
 
@@ -54,39 +54,34 @@ export interface UpdateModuleVersionRequest {
 }
 
 export const modulesApi = {
-    // 获取所有模块
     getModules: (includeStats: boolean = true) =>
         request.get<any, { data: ModuleInfo[] }>('/modules', {
-            params: { include_stats: includeStats }
+            params: { include_stats: includeStats },
         }),
 
-    // 获取模块详情
     getModule: (slug: string) =>
         request.get<any, { data: ModuleDetail }>(`/modules/${slug}`),
 
-    // 更新模块状态（启用/禁用）
     updateModuleStatus: (slug: string, data: UpdateModuleStatusRequest) =>
         request.put<any, { data: { slug: string; is_enabled: boolean; message: string } }>(
             `/modules/${slug}/status`,
-            data
+            data,
         ),
 
-    // 更新模块版本
     updateModuleVersion: (slug: string, data: UpdateModuleVersionRequest) =>
         request.put<any, { data: { slug: string; version: string; message: string } }>(
             `/modules/${slug}/version`,
-            data
+            data,
         ),
 
-    // 获取模块统计
     getModuleStats: (slug: string) =>
         request.get<any, { data: ModuleStats }>(`/modules/${slug}/stats`),
 
-    // 重新加载模块
     reloadModule: (slug: string) =>
         request.post<any, { data: { slug: string; message: string } }>(`/modules/${slug}/reload`),
 
-    // 同步模块注册表
     syncModules: () =>
-        request.post<any, { data: { message: string; created_count: number; total_modules: number } }>('/modules/sync'),
+        request.post<any, { data: { message: string; created_count: number; total_modules: number } }>(
+            '/modules/sync',
+        ),
 }

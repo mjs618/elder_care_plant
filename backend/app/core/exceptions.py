@@ -13,7 +13,6 @@ import structlog
 from fastapi import FastAPI, Request, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
 from sqlalchemy.exc import IntegrityError, SQLAlchemyError
 
 logger = structlog.get_logger()
@@ -58,6 +57,18 @@ class ConflictError(AppException):
             message=message,
             code="CONFLICT",
             status_code=status.HTTP_409_CONFLICT,
+            details=details,
+        )
+
+
+class BadRequestError(AppException):
+    """Invalid request or unmet precondition."""
+
+    def __init__(self, message: str, details: dict[str, Any] | None = None):
+        super().__init__(
+            message=message,
+            code="BAD_REQUEST",
+            status_code=status.HTTP_400_BAD_REQUEST,
             details=details,
         )
 
