@@ -8,32 +8,23 @@ Elder Care Platform - Version Management API Router
   - 升级与回滚操作
 """
 import uuid
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.core.dependencies import get_platform_admin, get_current_user
+from app.core.exceptions import ConflictError, NotFoundError
 from app.models.user import User
-from app.models.version import VersionStatus, ChangeType, CompatibilityLevel
+from app.models.version import VersionStatus, ChangeType
 from app.schemas.response import ok, created, paginated
 from app.schemas.version import (
     PlatformVersionCreate,
     PlatformVersionUpdate,
-    PlatformVersionResponse,
     ChangelogCreate,
-    ChangelogResponse,
-    ModuleVersionCreate,
-    ModuleVersionResponse,
     CompatibilityCreate,
-    CompatibilityResponse,
-    TenantVersionBindingResponse,
     ScheduleUpgradeRequest,
     RollbackRequest,
-    RollbackResponse,
-    VersionSummaryResponse,
-    UpgradeCheckResponse,
 )
 from app.services.version_service import (
     PlatformVersionService,
@@ -145,8 +136,6 @@ async def get_version_summary(
 ):
     """获取版本总览信息"""
     service = PlatformVersionService(db)
-    compat_service = CompatibilityService(db)
-
     from app.core.config import get_settings
     settings = get_settings()
 
@@ -198,7 +187,7 @@ async def get_version(
     service = PlatformVersionService(db)
     version = await service.get_version_by_id(version_id)
     if not version:
-        raise HTTPException(status_code=404, detail="Version not found")
+        raise NotFoundError("Version", str(version_id))
     return ok(_version_to_response(version))
 
 
@@ -237,9 +226,14 @@ async def update_version(
     service = PlatformVersionService(db)
     version = await service.get_version_by_id(version_id)
     if not version:
-        raise HTTPException(status_code=404, detail="Version not found")
+        raise NotFoundError("Version", str(version_id))
 
     update_data = body.model_dump(exclude_unset=True)
+    if "status" in update_data and update_data["status"] != version.status.value:
+        raise ConflictError(
+            "Version status transitions must use the dedicated release/deprecate endpoints"
+        )
+    update_data.pop("status", None)
     for key, value in update_data.items():
         setattr(version, key, value)
 

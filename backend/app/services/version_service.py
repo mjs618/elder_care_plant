@@ -10,17 +10,16 @@ Elder Care Platform - Version Management Service
 import re
 from dataclasses import dataclass
 from datetime import datetime, timezone
-from typing import Any
 import uuid
 
 from sqlalchemy import and_, desc, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from app.core.exceptions import BadRequestError, ConflictError, NotFoundError
 from app.models.version import (
     PlatformVersion,
     VersionChangelog,
-    ModuleVersion,
     VersionCompatibility,
     TenantVersionBinding,
     VersionRollback,
@@ -28,11 +27,10 @@ from app.models.version import (
     ChangeType,
     CompatibilityLevel,
 )
+from app.models.tenant import Tenant
 from app.schemas.version import (
     PlatformVersionCreate,
-    PlatformVersionUpdate,
     ChangelogCreate,
-    ModuleVersionCreate,
     CompatibilityCreate,
     ScheduleUpgradeRequest,
     RollbackRequest,
@@ -167,11 +165,11 @@ class PlatformVersionService:
         """创建新版本"""
         parsed = VersionService.parse_version(data.version)
         if not parsed:
-            raise ValueError(f"Invalid version format: {data.version}")
+            raise BadRequestError(f"Invalid version format: {data.version}")
 
         existing = await self.get_version_by_number(data.version)
         if existing:
-            raise ValueError(f"Version {data.version} already exists")
+            raise ConflictError(f"Version {data.version} already exists")
 
         version = PlatformVersion(
             version=data.version,
@@ -206,10 +204,12 @@ class PlatformVersionService:
         """发布版本"""
         version = await self.get_version_by_id(version_id)
         if not version:
-            raise ValueError(f"Version {version_id} not found")
+            raise NotFoundError("Version", str(version_id))
 
-        if version.status == VersionStatus.RELEASED:
-            raise ValueError(f"Version {version.version} is already released")
+        if version.status != VersionStatus.DRAFT:
+            raise ConflictError(
+                f"Version {version.version} can only be released from draft status"
+            )
 
         version.status = VersionStatus.RELEASED
         version.release_date = datetime.now(timezone.utc)
@@ -228,7 +228,12 @@ class PlatformVersionService:
         """标记版本为废弃"""
         version = await self.get_version_by_id(version_id)
         if not version:
-            raise ValueError(f"Version {version_id} not found")
+            raise NotFoundError("Version", str(version_id))
+
+        if version.status != VersionStatus.RELEASED:
+            raise ConflictError(
+                f"Version {version.version} must be released before it can be deprecated"
+            )
 
         version.status = VersionStatus.DEPRECATED
         await self.db.commit()
@@ -247,13 +252,16 @@ class PlatformVersionService:
             select(PlatformVersion)
             .options(selectinload(PlatformVersion.changelog))
             .where(PlatformVersion.id == version_id)
+            .where(PlatformVersion.is_deleted.is_(False))
         )
         return result.scalar_one_or_none()
 
     async def get_version_by_number(self, version: str) -> PlatformVersion | None:
         """根据版本号获取版本"""
         result = await self.db.execute(
-            select(PlatformVersion).where(PlatformVersion.version == version)
+            select(PlatformVersion)
+            .where(PlatformVersion.version == version)
+            .where(PlatformVersion.is_deleted.is_(False))
         )
         return result.scalar_one_or_none()
 
@@ -265,18 +273,18 @@ class PlatformVersionService:
         page_size: int = 20,
     ) -> tuple[list[PlatformVersion], int]:
         """获取版本列表"""
-        query = select(PlatformVersion).where(PlatformVersion.is_deleted == False)
+        query = select(PlatformVersion).where(PlatformVersion.is_deleted.is_(False))
 
         if status:
             query = query.where(PlatformVersion.status == status)
         if include_lts_only:
-            query = query.where(PlatformVersion.is_lts == True)
+            query = query.where(PlatformVersion.is_lts.is_(True))
 
-        count_query = select(PlatformVersion.id).where(PlatformVersion.is_deleted == False)
+        count_query = select(PlatformVersion.id).where(PlatformVersion.is_deleted.is_(False))
         if status:
             count_query = count_query.where(PlatformVersion.status == status)
         if include_lts_only:
-            count_query = count_query.where(PlatformVersion.is_lts == True)
+            count_query = count_query.where(PlatformVersion.is_lts.is_(True))
 
         total = len((await self.db.execute(count_query)).all())
 
@@ -293,7 +301,7 @@ class PlatformVersionService:
         result = await self.db.execute(
             select(PlatformVersion)
             .where(PlatformVersion.status == VersionStatus.RELEASED)
-            .where(PlatformVersion.is_deleted == False)
+            .where(PlatformVersion.is_deleted.is_(False))
             .order_by(
                 desc(PlatformVersion.major),
                 desc(PlatformVersion.minor),
@@ -309,14 +317,14 @@ class PlatformVersionService:
         result = await self.db.execute(
             select(PlatformVersion)
             .where(PlatformVersion.status == VersionStatus.RELEASED)
-            .where(PlatformVersion.is_lts == True)
+            .where(PlatformVersion.is_lts.is_(True))
             .where(
                 or_(
                     PlatformVersion.lts_end_date.is_(None),
                     PlatformVersion.lts_end_date > now,
                 )
             )
-            .where(PlatformVersion.is_deleted == False)
+            .where(PlatformVersion.is_deleted.is_(False))
             .order_by(
                 desc(PlatformVersion.major),
                 desc(PlatformVersion.minor),
@@ -519,7 +527,7 @@ class CompatibilityService:
         result = await self.db.execute(
             select(PlatformVersion.version)
             .where(PlatformVersion.status == VersionStatus.RELEASED)
-            .where(PlatformVersion.is_deleted == False)
+            .where(PlatformVersion.is_deleted.is_(False))
         )
         return [row[0] for row in result.all()]
 
@@ -530,6 +538,60 @@ class TenantVersionService:
     def __init__(self, db: AsyncSession):
         self.db = db
 
+    async def _ensure_tenant_exists(self, tenant_id: uuid.UUID) -> None:
+        tenant_id_result = await self.db.scalar(
+            select(Tenant.id)
+            .where(Tenant.id == tenant_id)
+            .where(Tenant.is_deleted.is_(False))
+        )
+        if tenant_id_result != tenant_id:
+            raise NotFoundError("Tenant", str(tenant_id))
+
+    async def _get_version_or_404(self, version_id: uuid.UUID) -> PlatformVersion:
+        version = await self.db.scalar(
+            select(PlatformVersion)
+            .where(PlatformVersion.id == version_id)
+            .where(PlatformVersion.is_deleted.is_(False))
+        )
+        if not isinstance(version, PlatformVersion):
+            raise NotFoundError("Version", str(version_id))
+        return version
+
+    async def _get_binding_or_404(self, tenant_id: uuid.UUID) -> TenantVersionBinding:
+        binding = await self.get_tenant_binding(tenant_id)
+        if not binding:
+            raise NotFoundError("Tenant version binding", str(tenant_id))
+        return binding
+
+    async def _ensure_upgrade_allowed(
+        self,
+        current_version_id: uuid.UUID,
+        target_version_id: uuid.UUID,
+    ) -> PlatformVersion:
+        current_version = await self._get_version_or_404(current_version_id)
+        target_version = await self._get_version_or_404(target_version_id)
+
+        if current_version.id == target_version.id:
+            raise ConflictError("Tenant is already using the target version")
+
+        compatibility = await CompatibilityService(self.db).check_compatibility(
+            current_version.version,
+            target_version.version,
+        )
+        if compatibility is None or compatibility.compatibility_level == CompatibilityLevel.NONE:
+            raise BadRequestError(
+                f"Upgrade from {current_version.version} to {target_version.version} "
+                "requires an explicit compatible transition"
+            )
+
+        return target_version
+
+    @staticmethod
+    def _clear_pending_upgrade(binding: TenantVersionBinding) -> None:
+        binding.pending_platform_version_id = None
+        binding.pending_module_versions = None
+        binding.upgrade_scheduled_at = None
+
     async def get_tenant_binding(
         self,
         tenant_id: uuid.UUID,
@@ -538,7 +600,7 @@ class TenantVersionService:
         result = await self.db.execute(
             select(TenantVersionBinding)
             .where(TenantVersionBinding.tenant_id == tenant_id)
-            .where(TenantVersionBinding.is_deleted == False)
+            .where(TenantVersionBinding.is_deleted.is_(False))
         )
         return result.scalar_one_or_none()
 
@@ -549,10 +611,15 @@ class TenantVersionService:
         module_versions: dict[str, str] | None = None,
     ) -> TenantVersionBinding:
         """绑定租户到指定版本"""
+        await self._ensure_tenant_exists(tenant_id)
+        await self._get_version_or_404(version_id)
+
         existing = await self.get_tenant_binding(tenant_id)
         if existing:
             existing.platform_version_id = version_id
             existing.module_versions = module_versions
+            self._clear_pending_upgrade(existing)
+            existing.upgrade_status = None
             await self.db.commit()
             await self.db.refresh(existing)
             return existing
@@ -574,14 +641,15 @@ class TenantVersionService:
         data: ScheduleUpgradeRequest,
     ) -> TenantVersionBinding:
         """计划租户升级"""
-        binding = await self.get_tenant_binding(tenant_id)
-        if not binding:
-            raise ValueError(f"No version binding found for tenant {tenant_id}")
+        binding = await self._get_binding_or_404(tenant_id)
+        if data.scheduled_at <= datetime.now(timezone.utc):
+            raise BadRequestError("Scheduled upgrade time must be in the future")
 
+        await self._ensure_upgrade_allowed(binding.platform_version_id, data.target_version_id)
+        binding.pending_platform_version_id = data.target_version_id
+        binding.pending_module_versions = data.module_versions
         binding.upgrade_scheduled_at = data.scheduled_at
         binding.upgrade_status = "pending"
-        if data.module_versions:
-            binding.module_versions = data.module_versions
 
         await self.db.commit()
         await self.db.refresh(binding)
@@ -601,14 +669,24 @@ class TenantVersionService:
         target_version_id: uuid.UUID,
     ) -> TenantVersionBinding:
         """执行租户升级"""
-        binding = await self.get_tenant_binding(tenant_id)
-        if not binding:
-            raise ValueError(f"No version binding found for tenant {tenant_id}")
+        binding = await self._get_binding_or_404(tenant_id)
+        if (
+            binding.pending_platform_version_id is not None
+            and binding.pending_platform_version_id != target_version_id
+        ):
+            raise ConflictError("A different upgrade is already scheduled for this tenant")
 
-        binding.platform_version_id = target_version_id
+        target_version = await self._ensure_upgrade_allowed(
+            binding.platform_version_id,
+            target_version_id,
+        )
+
+        binding.platform_version_id = target_version.id
+        if binding.pending_module_versions is not None:
+            binding.module_versions = binding.pending_module_versions
+        self._clear_pending_upgrade(binding)
         binding.upgrade_status = "completed"
         binding.last_upgrade_at = datetime.now(timezone.utc)
-        binding.upgrade_scheduled_at = None
 
         await self.db.commit()
         await self.db.refresh(binding)
@@ -628,9 +706,10 @@ class TenantVersionService:
         performed_by: uuid.UUID | None = None,
     ) -> VersionRollback:
         """创建回滚请求"""
-        binding = await self.get_tenant_binding(tenant_id)
-        if not binding:
-            raise ValueError(f"No version binding found for tenant {tenant_id}")
+        binding = await self._get_binding_or_404(tenant_id)
+        if binding.platform_version_id == data.target_version_id:
+            raise ConflictError("Cannot roll back to the tenant's current version")
+        await self._get_version_or_404(data.target_version_id)
 
         rollback = VersionRollback(
             tenant_id=tenant_id,
@@ -659,21 +738,28 @@ class TenantVersionService:
     ) -> VersionRollback:
         """执行回滚"""
         result = await self.db.execute(
-            select(VersionRollback).where(VersionRollback.id == rollback_id)
+            select(VersionRollback)
+            .where(VersionRollback.id == rollback_id)
+            .where(VersionRollback.is_deleted.is_(False))
         )
         rollback = result.scalar_one_or_none()
         if not rollback:
-            raise ValueError(f"Rollback {rollback_id} not found")
+            raise NotFoundError("Rollback", str(rollback_id))
+
+        if rollback.status != "pending":
+            raise ConflictError("Rollback can only be executed from pending status")
+
+        await self._get_version_or_404(rollback.to_version_id)
+        binding = await self._get_binding_or_404(rollback.tenant_id)
 
         rollback.status = "in_progress"
         rollback.started_at = datetime.now(timezone.utc)
-        await self.db.commit()
 
         try:
-            binding = await self.get_tenant_binding(rollback.tenant_id)
-            if binding:
-                binding.platform_version_id = rollback.to_version_id
-                binding.last_upgrade_at = datetime.now(timezone.utc)
+            binding.platform_version_id = rollback.to_version_id
+            binding.last_upgrade_at = datetime.now(timezone.utc)
+            self._clear_pending_upgrade(binding)
+            binding.upgrade_status = "completed"
 
             rollback.status = "completed"
             rollback.completed_at = datetime.now(timezone.utc)

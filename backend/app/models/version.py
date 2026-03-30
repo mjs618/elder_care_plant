@@ -163,7 +163,7 @@ class VersionChangelog(Base):
         nullable=False,
         index=True,
     )
-    
+
     change_type: Mapped[ChangeType] = mapped_column(
         Enum(ChangeType),
         nullable=False,
@@ -404,6 +404,13 @@ class TenantVersionBinding(BaseModel):
         nullable=False,
         index=True,
     )
+
+    pending_platform_version_id: Mapped[uuid.UUID | None] = mapped_column(
+        UUID(as_uuid=True),
+        ForeignKey("platform_versions.id"),
+        nullable=True,
+        index=True,
+    )
     
     module_versions: Mapped[dict | None] = mapped_column(
         JSONB,
@@ -411,6 +418,12 @@ class TenantVersionBinding(BaseModel):
         comment="租户激活的模块版本 {module_slug: version}",
     )
     
+    pending_module_versions: Mapped[dict | None] = mapped_column(
+        JSONB,
+        nullable=True,
+        comment="Planned module versions for the next upgrade",
+    )
+
     upgrade_scheduled_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True),
         nullable=True,
